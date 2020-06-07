@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 
-
+# imports
 import pandas as pd
 import numpy as np
 import datetime as dt
+import chainladder as cl
 
-
+# global parameters
 days_in_year = 365.25
 
-
+# functions
 def generate_policies(uw_start_date, 
                       insured_limit,
                       insured_excess,
@@ -23,8 +24,8 @@ def generate_policies(uw_start_date,
     days_in_year = 365.25
     start_date_offset = list(np.random.uniform(0,days_in_year, n_policies))
     start_date_offset.sort()
-    uw_start_date = [uw_start_date + dt.timedelta(days=x) for x in start_date_offset]
-    uw_end_date = [x + dt.timedelta(days=days_in_year) for x in uw_start_date]
+    uw_start_date_vec = [uw_start_date + dt.timedelta(days=x) for x in start_date_offset]
+    uw_end_date = [x + dt.timedelta(days=days_in_year) for x in uw_start_date_vec]
     
     #Create risk factors (stored as standard normals)
     policy_risk_factors_1 = np.random.normal(size=n_policies)
@@ -34,7 +35,7 @@ def generate_policies(uw_start_date,
     # build the dataframe
     db_policies = pd.DataFrame({'Class_name': class_name,
                                 'Policy_ID':range(n_policies), 
-                              'Start_date':uw_start_date,
+                              'Start_date':uw_start_date_vec,
                               'End_date':uw_end_date,
                               'Policy_premium': policy_premium,
                               'Policy_risk_factor_1':policy_risk_factors_1,
@@ -82,8 +83,7 @@ def generate_claims(db_policies,
     
     #set incident days
     db_policy_claims['Claim_incident_days'] = np.where(db_policy_claims['Claim_flag']==1, 
-                    np.random.uniform(0,days_in_year),np.nan)
-    
+                    np.random.uniform(0,days_in_year, size=n_policies),np.nan)
     
     #Set Reported days
     mu_reportdays = np.log((delay_reportdays_mean**2.0)/np.sqrt(delay_reportdays_mean**2.+delay_reportdays_sd**2.))
@@ -105,10 +105,11 @@ def generate_claims(db_policies,
     db_policy_claims['Claim_report_days'] = pd.to_timedelta(db_policy_claims['Claim_report_days'], unit='days')
     db_policy_claims['Claim_payment_days'] = pd.to_timedelta(db_policy_claims['Claim_payment_days'], unit='days')
 
-    db_policy_claims['Claim_incident_date'] = db_policy_claims['Start_date'] +     db_policy_claims['Claim_incident_days']
-    db_policy_claims['Claim_report_date'] = db_policy_claims['Claim_incident_date'] +     db_policy_claims['Claim_report_days']
-    db_policy_claims['Claim_payment_date'] = db_policy_claims['Claim_report_date'] +     db_policy_claims['Claim_payment_days']
+    db_policy_claims['Claim_incident_date'] = db_policy_claims['Start_date'] + db_policy_claims['Claim_incident_days']
+    db_policy_claims['Claim_report_date'] = db_policy_claims['Claim_incident_date'] + db_policy_claims['Claim_report_days']
+    db_policy_claims['Claim_payment_date'] = db_policy_claims['Claim_report_date'] + db_policy_claims['Claim_payment_days']
 
+    #end policies which have claimed (this could be optional)
     db_policy_claims['End_date'] = np.where(db_policy_claims['Claim_flag']==1, 
                     db_policy_claims['Claim_incident_date'],db_policy_claims['End_date'])
     
@@ -123,6 +124,10 @@ def generate_claims(db_policies,
     return db_policy_claims
 
 def summary_stats(db):
+    '''
+    generate summary statistics by year
+    '''
+    
     db['UW_year'] = db['Start_date'].dt.year
     stats = db.groupby('UW_year').agg({
             'Start_date':'count',
@@ -132,6 +137,42 @@ def summary_stats(db):
     stats['Loss_ratio'] = stats['Claim_value']/stats['Policy_premium']
     stats.rename({'Start_date':'Policies_written'}, axis='columns', inplace=True)
     return stats
+
+def summary_triangles(data, reporting_date):
+    '''
+    Remove all data which is not know at the reporting date and convert data into triangles, for further analysis
+    '''
+    
+    #fileter out all data not known at reporting date
+    
+    # create masks
+    data_triangles = data.copy()
+    date_mask_notpaid = (data_triangles['Claim_payment_date']-reporting_date)/np.timedelta64(1,'D')>0
+    date_mask_notreported = (data_triangles['Claim_report_date']-reporting_date)/np.timedelta64(1,'D')>0
+    date_mask_written = (data_triangles['Start_date']-reporting_date)/np.timedelta64(1,'D')<0
+    
+    #clear paid and reported data which is unknown at reporting date
+    data_triangles.loc[date_mask_notpaid, 'Claim_payment_date'] = np.nan
+    data_triangles.loc[date_mask_notreported, ['Claim_report_date','Claim_incident_date', 'Claim_value', 'Claim_value_gu']] = np.nan
+    
+    #remove unwritten policies
+    data_written = data_triangles.loc[date_mask_written].copy()    
+
+    tri_paid = cl.Triangle(data_written, 
+                    origin='Start_date',
+                    index='Class_name',
+                    development='Claim_payment_date',
+                    columns='Claim_value',
+                    cumulative=False).incr_to_cum()
+    
+    tri_incurred = cl.Triangle(data_written, 
+                    origin='Start_date',
+                    index='Class_name',
+                    development='Claim_report_date',
+                    columns='Claim_value',
+                    cumulative=False).incr_to_cum()
+    
+    return tri_paid, tri_incurred
     
 def generate_ultimate_portfolio(
         class_name='Class A',
@@ -144,11 +185,14 @@ def generate_ultimate_portfolio(
         historic_policy_growth=0.03,
         frequency=0.15, 
         severity_mean_gu=1000,
-        severity_sd_gu=500,
-        delay_reportdays_mean=10,
-        delay_reportdays_sd=10,
-        delay_paymentdays_mean=40,
-        delay_paymentdays_sd=10):
+        severity_sd_gu=800,
+        delay_reportdays_mean=100,
+        delay_reportdays_sd=200,
+        delay_paymentdays_mean=200,
+        delay_paymentdays_sd=200):
+    '''
+    generates ultimate data for a class of business
+    '''
 
     db_policy = []
     
@@ -186,5 +230,26 @@ def generate_ultimate_portfolio(
 # run code to test
 if __name__ == '__main__':
     uw_start_date = dt.datetime.strptime('01/01/2019', '%d/%m/%Y')
-    data, stats = generate_ultimate_portfolio()
+    
+    data_m, stats_m = generate_ultimate_portfolio(class_name='Motor', uw_start_date=uw_start_date)
+    data_p, stats_p= generate_ultimate_portfolio(class_name='Property', uw_start_date=uw_start_date)
+    data_l, stats_l = generate_ultimate_portfolio(class_name='Liability', uw_start_date=uw_start_date)
+
+    data_combinded = pd.concat([data_m, data_p, data_l])
+
+    reporting_date = dt.datetime.strptime('31/5/2019', '%d/%m/%Y')
+    tri_paid, tri_incurred = summary_triangles(data_combinded, reporting_date)
+
+    tri_incurred[tri_incurred['Class_name']=='Motor'].grain('OYDQ').T.plot(
+        marker='', grid=True,
+        title='Chart').set(
+        xlabel='Development Period',
+        ylabel='Cumulative Incurred Loss');
+
+    tri_paid[tri_paid['Class_name']=='Motor'].grain('OYDQ').T.plot(
+        marker='', grid=True,
+        title='Chart').set(
+        xlabel='Development Period',
+        ylabel='Cumulative Paid Loss');
+            
 

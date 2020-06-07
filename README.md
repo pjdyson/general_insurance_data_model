@@ -18,6 +18,7 @@ While there is really no substitute for real data, this is often commercially se
 - Only a single claim is generated per policy (or represeting total of policy claims). The policy is not terminated
 - Frequency is set as ground-up frequency, if excess frequeny is used adjust policy excess to zero and limit as the policy exposed value
 - Claim value generated from a lognormal with mean and SD
+- assumed case estimate is perfect and does not change, but there is a delay to payment
 - Timeings are calibrated using distibutions, offset as follows
 -- Incident date is set from a uniform distribution within policy year (no seasonality)
 -- Reported date is the delay in days from the incident
@@ -27,3 +28,7 @@ While there is really no substitute for real data, this is often commercially se
 - You can specify the number of historic years you would like in your data set
 - Years are offset by 365.25 days which is not quite correct (due to leap year) but used as an approximation here
 - You can specify a growth rate for the number of policies but all other parameters are assumed to be the same for prior years
+
+
+## Triange generation
+- Incurred triangle generated on reported date and value (assumed perfect case estimate)
