@@ -13,7 +13,7 @@ setup(
     maintainer='Peter Dyson',
     maintainer_email='peter@dysonmail.com',
     download_url='{}/archive/v{}.tar.gz'.format(url, version),
-    license='GNU3.0',
+    license='GPL3.0',
     url=url,
     description=descr,
     install_requires=[
