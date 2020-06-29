@@ -38,6 +38,7 @@ def generate_policies(uw_start_date,
                               'Start_date':uw_start_date_vec,
                               'End_date':uw_end_date,
                               'Policy_premium': policy_premium,
+                              'Policy_premium_date':uw_start_date_vec,
                               'Policy_risk_factor_1':policy_risk_factors_1,
                               'Policy_risk_factor_2':policy_risk_factors_2,
                               'Policy_risk_factor_3':policy_risk_factors_3,
@@ -123,56 +124,6 @@ def generate_claims(db_policies,
     
     return db_policy_claims
 
-def summary_stats(db):
-    '''
-    generate summary statistics by year
-    '''
-    
-    db['UW_year'] = db['Start_date'].dt.year
-    stats = db.groupby('UW_year').agg({
-            'Start_date':'count',
-            'Policy_premium':np.sum,
-            'Claim_value':np.sum
-                      })
-    stats['Loss_ratio'] = stats['Claim_value']/stats['Policy_premium']
-    stats.rename({'Start_date':'Policies_written'}, axis='columns', inplace=True)
-    return stats
-
-def summary_triangles(data, reporting_date):
-    '''
-    Remove all data which is not know at the reporting date and convert data into triangles, for further analysis
-    '''
-    
-    #fileter out all data not known at reporting date
-    
-    # create masks
-    data_triangles = data.copy()
-    date_mask_notpaid = (data_triangles['Claim_payment_date']-reporting_date)/np.timedelta64(1,'D')>0
-    date_mask_notreported = (data_triangles['Claim_report_date']-reporting_date)/np.timedelta64(1,'D')>0
-    date_mask_written = (data_triangles['Start_date']-reporting_date)/np.timedelta64(1,'D')<0
-    
-    #clear paid and reported data which is unknown at reporting date
-    data_triangles.loc[date_mask_notpaid, 'Claim_payment_date'] = np.nan
-    data_triangles.loc[date_mask_notreported, ['Claim_report_date','Claim_incident_date', 'Claim_value', 'Claim_value_gu']] = np.nan
-    
-    #remove unwritten policies
-    data_written = data_triangles.loc[date_mask_written].copy()    
-
-    tri_paid = cl.Triangle(data_written, 
-                    origin='Start_date',
-                    index='Class_name',
-                    development='Claim_payment_date',
-                    columns='Claim_value',
-                    cumulative=False).incr_to_cum()
-    
-    tri_incurred = cl.Triangle(data_written, 
-                    origin='Start_date',
-                    index='Class_name',
-                    development='Claim_report_date',
-                    columns='Claim_value',
-                    cumulative=False).incr_to_cum()
-    
-    return tri_paid, tri_incurred
     
 def generate_ultimate_portfolio(
         class_name='Class A',
@@ -227,6 +178,65 @@ def generate_ultimate_portfolio(
     
     return db_policy, stats
 
+def summary_stats(db):
+    '''
+    generate summary statistics by year
+    '''
+    
+    db['UW_year'] = db['Start_date'].dt.year
+    stats = db.groupby('UW_year').agg({
+            'Start_date':'count',
+            'Policy_premium':np.sum,
+            'Claim_value':np.sum
+                      })
+    stats['Loss_ratio'] = stats['Claim_value']/stats['Policy_premium']
+    stats.rename({'Start_date':'Policies_written'}, axis='columns', inplace=True)
+    return stats
+
+def summary_triangles(data, reporting_date):
+    '''
+    Remove all data which is not know at the reporting date and convert data into triangles, for further analysis
+    Returns 'chainladder' triangles
+    '''
+    
+    #fileter out all data not known at reporting date
+    
+    # create masks
+    data_triangles = data.copy()
+    date_mask_notpaid = (data_triangles['Claim_payment_date']-reporting_date)/np.timedelta64(1,'D')>0
+    date_mask_notreported = (data_triangles['Claim_report_date']-reporting_date)/np.timedelta64(1,'D')>0
+    date_mask_written = (data_triangles['Start_date']-reporting_date)/np.timedelta64(1,'D')<0
+    
+    #clear paid and reported data which is unknown at reporting date
+    data_triangles.loc[date_mask_notpaid, 'Claim_payment_date'] = np.nan
+    data_triangles.loc[date_mask_notreported, ['Claim_report_date','Claim_incident_date', 'Claim_value', 'Claim_value_gu']] = np.nan
+    
+    #remove unwritten policies
+    data_written = data_triangles.loc[date_mask_written].copy()    
+
+    tri_paid = cl.Triangle(data_written, 
+                    origin='Start_date',
+                    index='Class_name',
+                    development='Claim_payment_date',
+                    columns='Claim_value',
+                    cumulative=False).incr_to_cum()
+    
+    tri_premium = cl.Triangle(data_written, 
+                    origin='Start_date',
+                    index='Class_name',
+                    development='Policy_premium_date',
+                    columns='Policy_premium',
+                    cumulative=False).incr_to_cum()
+
+    tri_incurred = cl.Triangle(data_written, 
+                    origin='Start_date',
+                    index='Class_name',
+                    development='Claim_report_date',
+                    columns='Claim_value',
+                    cumulative=False).incr_to_cum()
+    
+    return tri_paid, tri_incurred, tri_premium
+
 # run code to test
 if __name__ == '__main__':
     uw_start_date = dt.datetime.strptime('01/01/2019', '%d/%m/%Y')
@@ -235,11 +245,15 @@ if __name__ == '__main__':
     data_p, stats_p= generate_ultimate_portfolio(class_name='Property', uw_start_date=uw_start_date)
     data_l, stats_l = generate_ultimate_portfolio(class_name='Liability', uw_start_date=uw_start_date)
 
-    data_combinded = pd.concat([data_m, data_p, data_l])
+    data_combinded = pd.concat([data_m]) #, data_p, data_l])
 
-    reporting_date = dt.datetime.strptime('31/5/2019', '%d/%m/%Y')
-    tri_paid, tri_incurred = summary_triangles(data_combinded, reporting_date)
+    reporting_date = dt.datetime.strptime('31/12/2019', '%d/%m/%Y')
+    tri_paid, tri_incurred, tri_premium = summary_triangles(data_combinded, reporting_date)
 
+    #
+    #plot some charts
+    #
+    
     tri_incurred[tri_incurred['Class_name']=='Motor'].grain('OYDQ').T.plot(
         marker='', grid=True,
         title='Chart').set(
@@ -252,4 +266,31 @@ if __name__ == '__main__':
         xlabel='Development Period',
         ylabel='Cumulative Paid Loss');
             
+    #
+    # export as csv file
+    #
 
+    #convert to long tall value (total across all classes)
+    tri_paid_df = tri_paid.grain('OYDQ').to_frame().reset_index().melt(id_vars='index', var_name='Development_Month', value_name='Paid')
+    tri_inc_df = tri_incurred.grain('OYDQ').to_frame().reset_index().melt(id_vars='index', var_name='Development_Month', value_name='Incurred')
+    tri_premium_df = tri_premium.grain('OYDQ').to_frame().reset_index().melt(id_vars='index', var_name='Development_Month', value_name='Premium')
+    
+    #combine all triangles to single df
+    tri_all = tri_premium_df.merge(tri_inc_df, on=['index', 'Development_Month'], how='left')
+    tri_all = tri_all.merge(tri_paid_df, on=['index', 'Development_Month'], how='left')
+    tri_all.rename({'index': 'Origin_Year'}, axis='columns',inplace=True)
+    
+    tri_all.to_csv('triangles.csv')
+                
+    
+        
+        
+        
+    
+    
+    
+    
+    
+    
+    
+    
