@@ -198,8 +198,9 @@ def summary_triangles(data, reporting_date):
     Remove all data which is not know at the reporting date and convert data into triangles, for further analysis
     Returns 'chainladder' triangles
     '''
-    
+    #    
     #fileter out all data not known at reporting date
+    #
     
     # create masks
     data_triangles = data.copy()
@@ -213,6 +214,7 @@ def summary_triangles(data, reporting_date):
     
     #remove unwritten policies
     data_written = data_triangles.loc[date_mask_written].copy()    
+
 
     tri_paid = cl.Triangle(data_written, 
                     origin='Start_date',
@@ -245,14 +247,23 @@ if __name__ == '__main__':
     data_p, stats_p= generate_ultimate_portfolio(class_name='Property', uw_start_date=uw_start_date)
     data_l, stats_l = generate_ultimate_portfolio(class_name='Liability', uw_start_date=uw_start_date)
 
+#%%
     data_combinded = pd.concat([data_m]) #, data_p, data_l])
+
+
+
+#%%
+
+
+    #
+    # build chainladder triangles
+    #
 
     reporting_date = dt.datetime.strptime('31/12/2019', '%d/%m/%Y')
     tri_paid, tri_incurred, tri_premium = summary_triangles(data_combinded, reporting_date)
 
-    #
     #plot some charts
-    #
+
     
     tri_incurred[tri_incurred['Class_name']=='Motor'].grain('OYDQ').T.plot(
         marker='', grid=True,
@@ -265,7 +276,8 @@ if __name__ == '__main__':
         title='Chart').set(
         xlabel='Development Period',
         ylabel='Cumulative Paid Loss');
-            
+        
+
     #
     # export as csv file
     #
