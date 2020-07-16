@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import chainladder as cl
+from dateutil.relativedelta import relativedelta
 
 # global parameters
 days_in_year = 365.25
@@ -21,11 +22,11 @@ def generate_policies(uw_start_date,
     '''
     
     #generate policy start/end dates (uniformly distributed)
-    days_in_year = 365.25
     start_date_offset = list(np.random.uniform(0,days_in_year, n_policies))
     start_date_offset.sort()
     uw_start_date_vec = [uw_start_date + dt.timedelta(days=x) for x in start_date_offset]
     uw_end_date = [x + dt.timedelta(days=days_in_year) for x in uw_start_date_vec]
+        #this results in a loose application of an underwriting year. The leap year may push some policies into the next year
     
     #Create risk factors (stored as standard normals)
     policy_risk_factors_1 = np.random.normal(size=n_policies)
@@ -148,14 +149,14 @@ def generate_ultimate_portfolio(
     db_policy = []
     
     for year_offset in range(0,historic_years):
-        uw_start_date = uw_start_date - dt.timedelta(days=days_in_year)
-            # offsets start date back 365.25 days. This is not quite correct (due to leap years)
+        uw_start_date_rel = uw_start_date - relativedelta(years=1*year_offset)
+
         temp_policy = generate_policies(class_name=class_name,
                                         insured_limit=insured_limit,
                                         insured_excess=insured_excess,
                                         policy_premium=policy_premium,
                                         n_policies=n_policies,
-                                        uw_start_date=uw_start_date)
+                                        uw_start_date=uw_start_date_rel)
         
         temp_policy = generate_claims(db_policies=temp_policy,
                                              frequency=frequency, 
@@ -206,14 +207,14 @@ def summary_triangles(data, reporting_date):
     data_triangles = data.copy()
     date_mask_notpaid = (data_triangles['Claim_payment_date']-reporting_date)/np.timedelta64(1,'D')>0
     date_mask_notreported = (data_triangles['Claim_report_date']-reporting_date)/np.timedelta64(1,'D')>0
-    date_mask_written = (data_triangles['Start_date']-reporting_date)/np.timedelta64(1,'D')<0
+    date_mask_notwritten = (data_triangles['Start_date']-reporting_date)/np.timedelta64(1,'D')>0
     
     #clear paid and reported data which is unknown at reporting date
     data_triangles.loc[date_mask_notpaid, 'Claim_payment_date'] = np.nan
     data_triangles.loc[date_mask_notreported, ['Claim_report_date','Claim_incident_date', 'Claim_value', 'Claim_value_gu']] = np.nan
     
     #remove unwritten policies
-    data_written = data_triangles.loc[date_mask_written].copy()    
+    data_written = data_triangles.loc[~date_mask_notwritten].copy()    
 
 
     tri_paid = cl.Triangle(data_written, 
@@ -239,45 +240,33 @@ def summary_triangles(data, reporting_date):
     
     return tri_paid, tri_incurred, tri_premium
 
+#%%
+
 # run code to test
 if __name__ == '__main__':
     uw_start_date = dt.datetime.strptime('01/01/2019', '%d/%m/%Y')
     
-    data_m, stats_m = generate_ultimate_portfolio(class_name='Motor', uw_start_date=uw_start_date)
-    data_p, stats_p= generate_ultimate_portfolio(class_name='Property', uw_start_date=uw_start_date)
-    data_l, stats_l = generate_ultimate_portfolio(class_name='Liability', uw_start_date=uw_start_date)
-
-#%%
-    data_combinded = pd.concat([data_m]) #, data_p, data_l])
-
-
-
-#%%
-
+    data_m, stats_m = generate_ultimate_portfolio(class_name='Motor', historic_years=10, uw_start_date=uw_start_date)
 
     #
     # build chainladder triangles
     #
 
     reporting_date = dt.datetime.strptime('31/12/2019', '%d/%m/%Y')
-    tri_paid, tri_incurred, tri_premium = summary_triangles(data_combinded, reporting_date)
+    tri_paid, tri_incurred, tri_premium = summary_triangles(data_m, reporting_date)
 
+    
+#%%            
+    #
     #plot some charts
-
+    #
     
     tri_incurred[tri_incurred['Class_name']=='Motor'].grain('OYDQ').T.plot(
         marker='', grid=True,
         title='Chart').set(
         xlabel='Development Period',
         ylabel='Cumulative Incurred Loss');
-
-    tri_paid[tri_paid['Class_name']=='Motor'].grain('OYDQ').T.plot(
-        marker='', grid=True,
-        title='Chart').set(
-        xlabel='Development Period',
-        ylabel='Cumulative Paid Loss');
         
-
     #
     # export as csv file
     #
