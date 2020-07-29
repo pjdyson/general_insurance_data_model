@@ -207,38 +207,71 @@ def summary_triangles(data, reporting_date):
     data_triangles = data.copy()
     date_mask_notpaid = (data_triangles['Claim_payment_date']-reporting_date)/np.timedelta64(1,'D')>0
     date_mask_notreported = (data_triangles['Claim_report_date']-reporting_date)/np.timedelta64(1,'D')>0
+    date_mask_paid = (data_triangles['Claim_payment_date']-reporting_date)/np.timedelta64(1,'D')<=0
+    date_mask_reported = (data_triangles['Claim_report_date']-reporting_date)/np.timedelta64(1,'D')<=0
+
     date_mask_notwritten = (data_triangles['Start_date']-reporting_date)/np.timedelta64(1,'D')>0
     
-    #clear paid and reported data which is unknown at reporting date
+    # clear paid and reported data which is unknown at reporting date
     data_triangles.loc[date_mask_notpaid, 'Claim_payment_date'] = np.nan
     data_triangles.loc[date_mask_notreported, ['Claim_report_date','Claim_incident_date', 'Claim_value', 'Claim_value_gu']] = np.nan
-    
-    #remove unwritten policies
-    data_written = data_triangles.loc[~date_mask_notwritten].copy()    
 
+    # add counts for paid and reported
+    data_triangles['Claim_count_reported'] = 0
+    data_triangles['Claim_count_paid'] = 0
+    data_triangles.loc[date_mask_reported, 'Claim_count_reported'] = 1
+    data_triangles.loc[date_mask_paid, 'Claim_count_paid'] = 1
 
-    tri_paid = cl.Triangle(data_written, 
+    # remove unwritten policies
+    data_policies = data_triangles.loc[~date_mask_notwritten].copy()    
+
+    tri_paid = cl.Triangle(data_policies, 
                     origin='Start_date',
                     index='Class_name',
                     development='Claim_payment_date',
                     columns='Claim_value',
-                    cumulative=False).incr_to_cum()
-    
-    tri_premium = cl.Triangle(data_written, 
+                    cumulative=False).incr_to_cum().to_frame().reset_index().melt(id_vars="index", var_name='Development Month', value_name='Paid Value').rename({'index':'Origin Month'}, axis='columns')
+
+
+    tri_paid_count = cl.Triangle(data_policies, 
                     origin='Start_date',
                     index='Class_name',
-                    development='Policy_premium_date',
-                    columns='Policy_premium',
-                    cumulative=False).incr_to_cum()
+                    development='Claim_payment_date',
+                    columns='Claim_count_paid',
+                    cumulative=False).incr_to_cum().to_frame().reset_index().melt(id_vars="index", var_name='Development Month', value_name='Paid Count').rename({'index':'Origin Month'}, axis='columns')
 
-    tri_incurred = cl.Triangle(data_written, 
+    
+    tri_reported = cl.Triangle(data_policies, 
                     origin='Start_date',
                     index='Class_name',
                     development='Claim_report_date',
                     columns='Claim_value',
-                    cumulative=False).incr_to_cum()
-    
-    return tri_paid, tri_incurred, tri_premium
+                    cumulative=False).incr_to_cum().to_frame().reset_index().melt(id_vars="index", var_name='Development Month', value_name='Reported Value').rename({'index':'Origin Month'}, axis='columns')
+
+
+    tri_reported_count = cl.Triangle(data_policies, 
+                    origin='Start_date',
+                    index='Class_name',
+                    development='Claim_report_date',
+                    columns='Claim_count_reported',
+                    cumulative=False).incr_to_cum().to_frame().reset_index().melt(id_vars="index", var_name='Development Month', value_name='Reported Count').rename({'index':'Origin Month'}, axis='columns')
+
+
+    tri_premium = cl.Triangle(data_policies, 
+                    origin='Start_date',
+                    index='Class_name',
+                    development='Policy_premium_date',
+                    columns='Policy_premium',
+                    cumulative=False).incr_to_cum().to_frame().reset_index().melt(id_vars="index", var_name='Development Month', value_name='Premium Value').rename({'index':'Origin Month'}, axis='columns')
+
+    #join all triangles together into a single dataframe
+    join_cols = ['Origin Month', 'Development Month']
+    tri_all = tri_paid.merge(tri_paid_count, on=join_cols)
+    tri_all = tri_paid.merge(tri_reported, on=join_cols)
+    tri_all = tri_all.merge(tri_reported_count, on=join_cols)
+    tri_all = tri_all.merge(tri_premium, on=join_cols)
+        
+    return tri_all, data_policies
 
 #%%
 
@@ -253,33 +286,11 @@ if __name__ == '__main__':
     #
 
     reporting_date = dt.datetime.strptime('31/12/2019', '%d/%m/%Y')
-    tri_paid, tri_incurred, tri_premium = summary_triangles(data_m, reporting_date)
-
+    triangles_all, data_policies = summary_triangles(data_m, reporting_date)
     
-#%%            
-    #
-    #plot some charts
-    #
-    
-    tri_incurred[tri_incurred['Class_name']=='Motor'].grain('OYDQ').T.plot(
-        marker='', grid=True,
-        title='Chart').set(
-        xlabel='Development Period',
-        ylabel='Cumulative Incurred Loss');
-        
     #
     # export as csv file
     #
-
-    #convert to long tall value (total across all classes)
-    tri_paid_df = tri_paid.grain('OYDQ').to_frame().reset_index().melt(id_vars='index', var_name='Development_Month', value_name='Paid')
-    tri_inc_df = tri_incurred.grain('OYDQ').to_frame().reset_index().melt(id_vars='index', var_name='Development_Month', value_name='Incurred')
-    tri_premium_df = tri_premium.grain('OYDQ').to_frame().reset_index().melt(id_vars='index', var_name='Development_Month', value_name='Premium')
-    
-    #combine all triangles to single df
-    tri_all = tri_premium_df.merge(tri_inc_df, on=['index', 'Development_Month'], how='left')
-    tri_all = tri_all.merge(tri_paid_df, on=['index', 'Development_Month'], how='left')
-    tri_all.rename({'index': 'Origin_Year'}, axis='columns',inplace=True)
     
     tri_all.to_csv('triangles.csv')
                 
